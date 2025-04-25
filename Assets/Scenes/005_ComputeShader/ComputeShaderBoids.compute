@@ -1,0 +1,187 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel Boids
+
+#include "Random.cginc"
+
+//variables
+RWStructuredBuffer<float3> Positions;
+RWStructuredBuffer<float3> Velocities;
+
+uniform float DeltaTime;
+uniform float3 VolumeBounds;
+uniform float maxforce;
+uniform float maxspeed;
+uniform float desiredseparation;
+uniform float desiredseparationSq;
+uniform float neighbordist;
+uniform float neighbordistSq;
+
+float lengthsq(float3 v)
+{
+    return v.x * v.x + v.y * v.y + v.z * v.z;
+}
+
+float lengthsq2(float3 a, float3 b)
+{
+    return (a.x - b.x) * (a.x - b.x) +
+        (a.y - b.y) * (a.y - b.y) +
+        (a.z - b.z) * (a.z - b.z);
+}
+
+float3 limit(float3 v, float max)
+{
+    if (lengthsq(v) > max * max)
+    {
+        return normalize(v) * max;
+    }
+
+    return v;
+}
+
+float3 seek(float3 target, float3 position, float3 velocity)
+{
+    // A vector pointing from the position to the target
+    float3 desired = target - position;
+
+    // Scale to maximum speed
+    desired = maxspeed * normalize(desired);
+
+    // Steering = Desired minus Velocity
+    float3 steer = desired - velocity;
+
+    steer = limit(steer, maxforce);
+
+    return steer;
+}
+
+// the biggest issue currently with this code is that it always computes the euclidean squared distance
+// float d = lengthsq(Positions[i] - currentPosition);
+// this should be precomputed for each frame in a different buffer and used from there
+// alternatively, using fancy algorithms and data structures (linear array corresponding with triangle arrays) might improve running time
+// see https://hal.archives-ouvertes.fr/hal-02047514/document and/or https://arxiv.org/pdf/1502.07541.pdf
+float3 SeparateAlignCohesion(int index)
+{
+    uint positionsMembers, stride;
+    Positions.GetDimensions(positionsMembers, stride);
+
+    float3 separateSteer = float3(0, 0, 0);
+    float3 alignSum = float3(0, 0, 0);
+    float3 cohesionSum = float3(0, 0, 0);
+
+    int separateCount = 0;
+    int otherCount = 0;
+
+    float3 currentPosition = Positions[index];
+    float3 currentVelocity = Velocities[index];
+
+    // For every boid in the system, check if it's too close
+    for (uint i = 0; i < positionsMembers; i++)
+    {
+        // float d = lengthsq(Positions[i] - currentPosition);
+        float d = lengthsq2(Positions[i], currentPosition);
+
+        // If the distance is greater than 0 and less than an arbitrary amount (0 when you are yourself)
+        if (d > 0)
+        {
+            if (d < desiredseparationSq)
+            {
+                // Calculate vector pointing away from neighbor
+                float3 diff = currentPosition - Positions[i];
+                diff = normalize(diff);
+                diff /= d;        // Weight by distance
+                separateSteer += diff;
+                separateCount++;            // Keep track of how many
+            }
+            else if (d < neighbordistSq)
+            {
+                alignSum += Velocities[i];
+                cohesionSum += Positions[i];
+                otherCount++;
+            }
+        }
+
+    }
+
+    // Average -- divide by how many
+    if (separateCount > 0)
+    {
+        separateSteer /= separateCount;
+    }
+
+    // As long as the vector is greater than 0
+    if (lengthsq(separateSteer) > 0)
+    {
+        // Implement Reynolds: Steering = Desired - Velocity
+        separateSteer = normalize(separateSteer);
+        separateSteer *= maxspeed;
+        separateSteer -= currentVelocity;
+        separateSteer = limit(separateSteer, maxforce);
+    }
+
+    float3 alignSteer = float3(0, 0, 0);
+    float3 cohesionSteer = float3(0, 0, 0);
+
+    if (otherCount > 0)
+    {
+        alignSum /= otherCount;
+        alignSum = normalize(alignSum);
+        alignSum *= maxspeed;
+
+        alignSteer = alignSum - currentVelocity;
+        alignSteer = limit(alignSteer, maxforce);
+
+        cohesionSum /= otherCount;
+        cohesionSteer = seek(cohesionSum, currentPosition, currentVelocity);
+    }
+
+    // Arbitrarily weight these forces
+    return 1.5 * separateSteer + 1 * alignSteer + 1 * cohesionSteer;
+}
+
+// Wraparound
+float3 Wraparound(float3 pos)
+{
+    float x = pos.x;
+    float y = pos.y;
+    float z = pos.z;
+
+    if (x < -VolumeBounds.x)
+    {
+        pos.x = 2 * VolumeBounds.x - x;
+    }
+    else if (x > VolumeBounds.x)
+    {
+        pos.x = -2 * VolumeBounds.x + x;
+    }
+
+    if (y < -VolumeBounds.y)
+    {
+        pos.y = 2 * VolumeBounds.y - y;
+    }
+    else if (y > VolumeBounds.y)
+    {
+        pos.y = -2 * VolumeBounds.y + y;
+    }
+
+    if (z < -VolumeBounds.z)
+    {
+        pos.z = 2 * VolumeBounds.z - z;
+    }
+    else if (z > VolumeBounds.z)
+    {
+        pos.z = -2 * VolumeBounds.z + z;
+    }
+
+    return pos;
+}
+
+
+[numthreads(64,1,1)]
+void Boids (uint3 id : SV_DispatchThreadID)
+{
+    Velocities[id.x] += SeparateAlignCohesion(id.x);
+
+    Positions[id.x] += Velocities[id.x] * DeltaTime;
+    Positions[id.x] = Wraparound(Positions[id.x]);
+}
+
