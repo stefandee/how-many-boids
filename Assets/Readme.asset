@@ -38,8 +38,8 @@ MonoBehaviour:
     linkText: Open the scene
     url: Assets/Scenes/003_JobsBurst/BoidsJobsBurst.unity
   - heading: 4. Burst Jobs Boids #2
-    text: An alternative simulation that uses Unity jobs system combined with the
-      Burst compiler
+    text: An alternative simulation algorithm that uses Unity jobs system combined
+      with the Burst compiler
     linkText: Open the scene
     url: Assets/Scenes/004_JobsBurstAlternate/BoidsJobsBurstAlternate.unity
   - heading: 5. Compute Shader Boids
